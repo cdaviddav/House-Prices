@@ -1,0 +1,12 @@
+# MlFlow
+**/04_mlflow/mlruns
+**/04_mlflow/models
+**/04_mlflow/submissions
+**/04_mlflow/tensorboard
+
+
+**/04_MachineLearningModels/mlruns
+**/04_MachineLearningModels/models
+**/04_MachineLearningModels/submissions
+**/04_MachineLearningModels/cache
+**/04_MachineLearningModels/tensorboard

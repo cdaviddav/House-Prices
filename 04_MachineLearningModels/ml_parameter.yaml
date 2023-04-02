@@ -1,0 +1,52 @@
+# Hyperparameter for Machine Learning Algorithms
+experiment_name: "HousePrices"
+RANDOM_STATE: 42
+N_TRAILS: 50 # run for xx runs
+TIMEOUT: 600 # run for max 10 minutes (if the last run at 9 minutes runs for 1h, the active run is not killed)
+N_SPLITS: 5
+TEST_SIZE: 0.2
+
+
+path_df_train: "../03_DataPreprocessing/df_train_prepared_reduced.pkl"
+path_df_test: "../03_DataPreprocessing/df_test_prepared_reduced.pkl"
+
+# Lasso
+lasso_alpha: [2, 5] # before [0, 10]
+lasso_max_iter: [4000, 8000] # before [100, 10000]
+
+# Ridge
+ridge_alpha: [3, 6] # before [0, 10]
+ridge_max_iter: [5, 1000] # before [100, 10000]
+ridge_solver: ['cholesky'] # before ['auto', 'svd', 'cholesky', 'lsqr', 'sag']
+
+# BayesianRidge
+bayesianRidge_n_iter: [100, 5000] # before [100, 10000]
+bayesianRidge_alpha_init: [0, 10]
+bayesianRidge_alpha_1: [6, 9] # before [0, 10]
+bayesianRidge_alpha_2: [0, 4] # before [0, 10]
+bayesianRidge_lambda_init: [0, 10]
+bayesianRidge_lambda_1: [2, 4] # before [0, 10]
+bayesianRidge_lambda_2: [0, 2] # before [0, 10]
+
+# ElasticNet
+elasticNet_alpha: [0, 5] # before [0, 10]
+elasticNet_max_iter: [100, 4000] # before [100, 10000]
+elasticNet_l1_ratio: [0.7, 1] # before [0, 1]
+
+# GradientBoostingRegressor
+gbr_n_estimators: [2000, 3000] # before [10, 5000]
+gbr_learning_rate: [0.001, 0.5] # before [0.001, 5]
+gbr_subsample: [0.5, 0.85] # before [0, 1]
+gbr_min_samples_split: [0, 0.5]
+gbr_min_samples_leaf: [0, 0.1] # before [0, 0.5]
+gbr_max_depth: [2, 10]
+gbr_max_features: [0.6, 0.8] # before [0, 1]
+gbr_alpha: [0, 0.4] # before [0, 1]
+
+# RandomForestRegressor
+rfr_n_estimators: [10, 5000] # before [1000, 4000]
+rfr_max_depth: [2, 10] # before [2, 4]
+rfr_min_samples_split: [0, 0.5] # before [0, 0.1]
+rfr_min_samples_leaf: [0, 0.5] # before [0, 0.1]
+rfr_max_features: [0, 1] # before [0.8, 1]
+rfr_max_leaf_nodes: [2, 10] # before [9, 15]
