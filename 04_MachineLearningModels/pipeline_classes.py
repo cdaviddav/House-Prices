@@ -142,10 +142,7 @@ class SkewedFeatureTransformer(BaseEstimator, TransformerMixin):
     def transform(self, x:pd.DataFrame) -> pd.DataFrame:
         if self.transform_skewed_features_flag==True:
             for feature in list(self.skewed_features):
-                x[feature] = x[feature].apply(np.log)
-                # the not transformed data that contains 0
-                # after the transformation we have -inf values that have to be replaced by 0
-                x[feature][np.isneginf(x[feature])]=0
+                x[feature] = x[feature].apply(np.log1p)
 
         return x
 
