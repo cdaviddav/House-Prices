@@ -104,6 +104,9 @@ class CreateNewFeatures(BaseEstimator, TransformerMixin):
         x['GarageArea_bin'] = x['GarageArea'].apply(lambda x: 1 if x>0 else 0)
         x['MiscVal_bin'] = x['MiscVal'].apply(lambda x: 1 if x>0 else 0)
 
+        # transform month to continous feature
+        x['MoSold'] = (-np.cos(0.5236*x['MoSold']))
+
         x.replace([np.inf, -np.inf], 0, inplace=True)
         return x
 
