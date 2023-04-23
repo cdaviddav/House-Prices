@@ -5,10 +5,9 @@ from scipy.stats import skew
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.pipeline import Pipeline
 
 from typing import Optional
-
-
 
 
 class ImputMissingValuesNumeric(BaseEstimator, TransformerMixin):
@@ -22,18 +21,36 @@ class ImputMissingValuesNumeric(BaseEstimator, TransformerMixin):
         if self.imputer_function == "SimpleImputer":
             imputer = SimpleImputer(strategy='mean', missing_values=np.nan)
         elif self.imputer_function == "KNNImputer":
-            imputer = KNNImputer(missing_values=np.nan)
+
+            # do not use StandardScaler because in cv could be negative values that are not inverse transformed
+            # alternative: use StandardScaler, but run SkewedFeatureTransformer before ImputMissingValuesNumeric
+            imputer = Pipeline(
+                steps=[
+                    ("scaler", MinMaxScaler()), 
+                    ("knn_imputer", KNNImputer(missing_values=np.nan))
+                ]
+            )
         
-        self.num_features = list(x.describe())
-        self.imputer_num = imputer.fit(x[self.num_features])
+        self.imputer_num = imputer.fit(x)
         return self
 
     def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        try:
-            x[self.imputer_num.feature_names_in_] = self.imputer_num.transform(x[self.imputer_num.feature_names_in_])
-        except KeyError:
-            pass
+        if self.imputer_function == "SimpleImputer":
+            x = pd.DataFrame(
+                data=self.imputer_num.transform(x),
+                columns=self.imputer_num.feature_names_in_
+                )
+        
+        # inverse the feature transformation, because for StandardScaler you can have values < -1 after transformation
+        # values < -1 can not be log1ü transformed in the SkewedFeatureTransformer
+        elif self.imputer_function == "KNNImputer":
+            data=self.imputer_num.transform(x)
+            data=self.imputer_num["scaler"].inverse_transform(data)
+            x = pd.DataFrame(data, columns=self.imputer_num.feature_names_in_)
+            
+        # print(f"Missing values after ImputMissingValuesNumeric: {x.isnull().sum().sum()}")
         return x
+
 
 
 def compute_skewed_features(df, skewed_threshold):
@@ -41,9 +58,8 @@ def compute_skewed_features(df, skewed_threshold):
   compute the skewness of all numeric features and the total number of unique values
   return only the features that have a relevant skewness
   """
-  numeric_feats = df.dtypes[df.dtypes != "object"].index
-  skewed_feats = pd.DataFrame(index=numeric_feats, columns=['skewness', 'unique_values'])
-  skewed_feats['skewness'] = df[numeric_feats].skew()
+  skewed_feats = pd.DataFrame(index=df.columns, columns=['skewness', 'unique_values'])
+  skewed_feats['skewness'] = df.skew()
   skewed_feats['unique_values'] = df.nunique()
   skewed_feats['percentage_0'] = df[df == 0].count(axis=0)/len(df.index)
   skewed_feats = skewed_feats[
@@ -74,7 +90,11 @@ class SkewedFeatureTransformer(BaseEstimator, TransformerMixin):
 
     # create a list for each transformation that is applied in the transform function
     self.features_to_transform_log1p = df_tmp[df_tmp.transformer_skew == "log1p"].index
+    # print(f"log1p transformation: {self.features_to_transform_log1p}")
+
     self.features_to_transform_sqrt = df_tmp[df_tmp.transformer_skew == "sqrt"].index
+    # print(f"sqrt transformation: {self.features_to_transform_sqrt}")
+    
     return self
 
   def transform(self, x:pd.DataFrame) -> pd.DataFrame:
@@ -83,26 +103,6 @@ class SkewedFeatureTransformer(BaseEstimator, TransformerMixin):
       x[self.features_to_transform_sqrt] = x[self.features_to_transform_sqrt].apply(np.sqrt)
       return x
 
-
-class CorrelationTransformer(BaseEstimator, TransformerMixin):
-
-    def __init__(self, correlation_threshold:float):
-        self.correlation_threshold = correlation_threshold
-        self.to_drop=None
-
-    def fit(self, x:np.ndarray, y:Optional[pd.DataFrame]=None) -> "CorrelationTransformer":
-        corr_matrix = pd.DataFrame(x).corr().abs()
-
-        # Select upper triangle of correlation matrix
-        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-
-        # Find features with correlation higher or lower than correlation_threshold
-        self.to_drop = [column for column in upper.columns if any((upper[column] > self.correlation_threshold) | (upper[column] < -self.correlation_threshold))]
-        return self
-
-    def transform(self, x:np.ndarray) -> pd.DataFrame:
-        x = pd.DataFrame(x).drop(self.to_drop, axis=1)
-        return x
 
 
 class ScalerTransformer(BaseEstimator, TransformerMixin):
@@ -137,3 +137,23 @@ class ScalerTransformer(BaseEstimator, TransformerMixin):
         return pd.concat([x_inverse_transform, x[self.transformer_not_num]], axis=1)
 
 
+
+class CorrelationTransformer(BaseEstimator, TransformerMixin):
+
+    def __init__(self, correlation_threshold:float):
+        self.correlation_threshold = correlation_threshold
+        self.to_drop=None
+
+    def fit(self, x:np.ndarray, y:Optional[pd.DataFrame]=None) -> "CorrelationTransformer":
+        corr_matrix = pd.DataFrame(x).corr().abs()
+
+        # Select upper triangle of correlation matrix
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+        # Find features with correlation higher or lower than correlation_threshold
+        self.to_drop = [column for column in upper.columns if any((upper[column] > self.correlation_threshold) | (upper[column] < -self.correlation_threshold))]
+        return self
+
+    def transform(self, x:np.ndarray) -> pd.DataFrame:
+        x = pd.DataFrame(x).drop(self.to_drop, axis=1)
+        return x
