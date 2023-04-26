@@ -1,7 +1,7 @@
 # Hyperparameter for Machine Learning Algorithms
 experiment_name: "HousePrices"
 RANDOM_STATE: 42
-N_TRAILS: 50 # run for xx runs
+N_TRAILS: 30 # run for xx runs
 TIMEOUT: 600 # run for max 10 minutes (if the last run at 9 minutes runs for 1h, the active run is not killed)
 N_SPLITS: 5
 TEST_SIZE: 0.2
