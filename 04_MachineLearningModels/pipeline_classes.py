@@ -3,14 +3,11 @@ import numpy as np
 from scipy.stats import skew
 
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import SimpleImputer, IterativeImputer, KNNImputer
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, OneHotEncoder
-from sklearn.feature_selection import VarianceThreshold
+from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.pipeline import Pipeline
 
 from typing import Optional
-
-
 
 
 class ImputMissingValuesNumeric(BaseEstimator, TransformerMixin):
@@ -24,343 +21,88 @@ class ImputMissingValuesNumeric(BaseEstimator, TransformerMixin):
         if self.imputer_function == "SimpleImputer":
             imputer = SimpleImputer(strategy='mean', missing_values=np.nan)
         elif self.imputer_function == "KNNImputer":
-            imputer = KNNImputer(missing_values=np.nan)
+
+            # do not use StandardScaler because in cv could be negative values that are not inverse transformed
+            # alternative: use StandardScaler, but run SkewedFeatureTransformer before ImputMissingValuesNumeric
+            imputer = Pipeline(
+                steps=[
+                    ("scaler", MinMaxScaler()), 
+                    ("knn_imputer", KNNImputer(missing_values=np.nan))
+                ]
+            )
         
-        self.num_features = list(x.describe())
-        self.imputer_num = imputer.fit(x[self.num_features])
+        self.imputer_num = imputer.fit(x)
         return self
 
     def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        try:
-            x[self.imputer_num.feature_names_in_] = self.imputer_num.transform(x[self.imputer_num.feature_names_in_])
-        except KeyError:
-            pass
-        return x
-
-
-class ImputMissingValuesCategoric(BaseEstimator, TransformerMixin):
-
-    def __init__(self):
-        self.imputer_cat = None
-        self.cat_features = None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "ImputMissingValuesCategoric":
-        imputer = SimpleImputer(strategy='most_frequent', missing_values=np.nan)
+        if self.imputer_function == "SimpleImputer":
+            x = pd.DataFrame(
+                data=self.imputer_num.transform(x),
+                columns=self.imputer_num.feature_names_in_
+                )
         
-        self.cat_features = list(x.describe(include=['O']))
-        self.imputer_cat = imputer.fit(x[self.cat_features])
-        return self
-
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        try:
-            x[self.imputer_cat.feature_names_in_] = self.imputer_cat.transform(x[self.imputer_cat.feature_names_in_])
-        except KeyError:
-            pass
-        return x
-
-
-def find_season(month, hemisphere):
-    if hemisphere == 'Southern':
-        season_month_south = {
-            12:'Summer', 1:'Summer', 2:'Summer',
-            3:'Autumn', 4:'Autumn', 5:'Autumn',
-            6:'Winter', 7:'Winter', 8:'Winter',
-            9:'Spring', 10:'Spring', 11:'Spring'}
-        return season_month_south.get(month)
-        
-    elif hemisphere == 'Northern':
-        season_month_north = {
-            12:'Winter', 1:'Winter', 2:'Winter',
-            3:'Spring', 4:'Spring', 5:'Spring',
-            6:'Summer', 7:'Summer', 8:'Summer',
-            9:'Autumn', 10:'Autumn', 11:'Autumn'}
-        return season_month_north.get(month)
-    else:
-        print('Invalid selection. Please select a hemisphere and try again')
-
-
-class CreateNewFeatures(BaseEstimator, TransformerMixin):
-
-    def __init__(self):
-        return None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "CreateNewFeatures":
-        self.x_train = x.copy()
-        return self
-
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        x["TotalFS"] = x["1stFlrSF"] + x["2ndFlrSF"] + x["GrLivArea"]
-        x["MeanSFRoom"] = round(x["TotalFS"] / x["TotRmsAbvGrd"], 0)
-        x["YearsBeforeWork"] = x["YearRemodAdd"] - x["YearBuilt"]
-        x["TotalBath"] = x["FullBath"] + 0.5*x["HalfBath"] + x["BsmtFullBath"] + 0.5*x["BsmtHalfBath"]
-        x["TotalFS_TotalBath"] = x["TotalFS"] / x["TotalBath"]
-        x["GarageArea_GarageCars"] = x["GarageArea"] / x["GarageCars"]
-        x["TotalPorchSF"] = x["OpenPorchSF"] + x["EnclosedPorch"] + x["3SsnPorch"] + x["ScreenPorch"]
-        x["YearsBeforeSold"] = x["YrSold"] - x["YearBuilt"]
-        x["SeasonSold"] = x["MoSold"].apply(lambda x: find_season(x, "Northern"))
-
-        x['PoolArea_bin'] = x['PoolArea'].apply(lambda x: 1 if x>0 else 0)
-        x['TotalPorchSF_bin'] = x['TotalPorchSF'].apply(lambda x: 1 if x>0 else 0)
-        x['GarageArea_bin'] = x['GarageArea'].apply(lambda x: 1 if x>0 else 0)
-        x['MiscVal_bin'] = x['MiscVal'].apply(lambda x: 1 if x>0 else 0)
-
-        x.replace([np.inf, -np.inf], 0, inplace=True)
+        # inverse the feature transformation, because for StandardScaler you can have values < -1 after transformation
+        # values < -1 can not be log1ü transformed in the SkewedFeatureTransformer
+        elif self.imputer_function == "KNNImputer":
+            data=self.imputer_num.transform(x)
+            data=self.imputer_num["scaler"].inverse_transform(data)
+            x = pd.DataFrame(data, columns=self.imputer_num.feature_names_in_)
+            
+        # print(f"Missing values after ImputMissingValuesNumeric: {x.isnull().sum().sum()}")
         return x
 
 
 
-def compute_skewed_features(df):
-    """
-    compute the skewness of all numeric features and the total number of unique values
-    return only the features that have a relevant skewness
-    """
-    numeric_feats = df.dtypes[df.dtypes != "object"].index
-    skewed_feats = pd.DataFrame(index=numeric_feats, columns=['skewness', 'unique_values'])
-    skewed_feats['skewness'] = df[numeric_feats].apply(lambda x: skew(x))
-    skewed_feats['unique_values'] = df.nunique()
-    skewed_feats['percentage_0'] = df[df == 0].count(axis=0)/len(df.index)
-    skewed_feats = skewed_feats[
-        ((skewed_feats['skewness'] > 3) | (skewed_feats['skewness'] < -3)) & 
-        (skewed_feats['unique_values'] > 10) &
-        (skewed_feats['percentage_0'] < 0.5)
-        ]
+def compute_skewed_features(df, skewed_threshold):
+  """
+  compute the skewness of all numeric features and the total number of unique values
+  return only the features that have a relevant skewness
+  """
+  skewed_feats = pd.DataFrame(index=df.columns, columns=['skewness', 'unique_values'])
+  skewed_feats['skewness'] = df.skew()
+  skewed_feats['unique_values'] = df.nunique()
+  skewed_feats['percentage_0'] = df[df == 0].count(axis=0)/len(df.index)
+  skewed_feats = skewed_feats[
+      ((skewed_feats['skewness'] > skewed_threshold) | (skewed_feats['skewness'] < - skewed_threshold)) & 
+      (skewed_feats['unique_values'] > 10) &
+      (skewed_feats['percentage_0'] < 0.5)
+      ]
 
-    return skewed_feats
+  return skewed_feats
 
 
 class SkewedFeatureTransformer(BaseEstimator, TransformerMixin):
+  def __init__(self, skewed_threshold:float):
+    self.skewed_threshold = skewed_threshold
+    self.features_to_transform = None
+    self.features_to_transform_log1p = None
+    self.features_to_transform_sqrt = None
 
-    def __init__(self, transform_skewed_features_flag:bool):
-        self.transform_skewed_features_flag = transform_skewed_features_flag
-        self.skewed_features = None
+  def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "SkewedFeatureTransformer":
+    self.features_to_transform = compute_skewed_features(x, self.skewed_threshold).index
 
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "SkewedFeatureTransformer":
-        df_skewed_features = compute_skewed_features(x)
-        self.skewed_features = df_skewed_features.index
-        return self
+    df_tmp = pd.DataFrame(index=self.features_to_transform, columns=["log1p", "sqrt"])
+    df_tmp["log1p"] = x[self.features_to_transform].apply(np.log1p).skew()
+    df_tmp["sqrt"] = x[self.features_to_transform].apply(np.sqrt).skew()
 
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        if self.transform_skewed_features_flag==True:
-            for feature in list(self.skewed_features):
-                x[feature] = x[feature].apply(np.log1p)
+    # use idxmin(axis=1) to get the transformer with the lowest skewness
+    df_tmp["transformer_skew"] = df_tmp.idxmin(axis=1)
 
-        return x
+    # create a list for each transformation that is applied in the transform function
+    self.features_to_transform_log1p = df_tmp[df_tmp.transformer_skew == "log1p"].index
+    # print(f"log1p transformation: {self.features_to_transform_log1p}")
 
-
-class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
-
-    def __init__(self):
-        return None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "LabelEncoderTransformer":
-        self.x_train = x.copy()
-        return self
-
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        
-        map_Utilities = {
-            'ELO': 0,
-            'NoSeWa': 1,
-            'NoSewr': 2,
-            'AllPub': 3
-        }
-        x["Utilities"] = x["Utilities"].map(map_Utilities)
-
-
-        map_LandSlope = {
-            'Gtl': 0,
-            'Mod': 1,
-            'Sev': 2
-        }
-        x["LandSlope"] = x["LandSlope"].map(map_LandSlope)
-        
-
-        map_HouseStyle = {
-            '1Story': 0,
-            '1.5Fin': 1,
-            '1.5Unf': 2,
-            '2Story': 3,
-            '2.5Fin': 4,
-            '2.5Unf': 5,
-            'SFoyer': 6,
-            'SLvl': 7
-        }
-        x["HouseStyle"] = x["HouseStyle"].map(map_HouseStyle)
-
-
-        map_ExterQual = {
-            'Po': 0,
-            'Fa': 1,
-            'TA': 2,
-            'Gd': 3,
-            'Ex': 4
-        }
-        x["ExterQual"] = x["ExterQual"].map(map_ExterQual)
-        x["ExterCond"] = x["ExterCond"].map(map_ExterQual)
-        
-
-        map_BsmtQual = {
-            'NA': 0,
-            'Po': 1,
-            'Fa': 2,
-            'TA': 3,
-            'Gd': 4,
-            'Ex': 5
-        }
-        x["BsmtQual"] = x["BsmtQual"].map(map_BsmtQual)
-        x["BsmtCond"] = x["BsmtCond"].map(map_BsmtQual)
-        x["GarageQual"] = x["GarageQual"].map(map_BsmtQual)
-        x["GarageCond"] = x["GarageCond"].map(map_BsmtQual)
-
-
-        map_BsmtExposure = {
-            'NA': 0,
-            'No': 1,
-            'Mn': 2,
-            'Av': 3,
-            'Gd': 4
-        }
-        x["BsmtExposure"] = x["BsmtExposure"].map(map_BsmtExposure)
-
-
-        map_BsmtFinType1 = {
-            'NA': 0,
-            'Unf': 1,
-            'LwQ': 2,
-            'Rec': 3,
-            'BLQ': 4,
-            'ALQ': 5,
-            'GLQ': 6
-        }
-        x["BsmtFinType1"] = x["BsmtFinType1"].map(map_BsmtFinType1)
-        x["BsmtFinType2"] = x["BsmtFinType2"].map(map_BsmtFinType1)
-
-
-        map_HeatingQC = {
-            'Po': 0,
-            'Fa': 1,
-            'TA': 2,
-            'Gd': 3,
-            'Ex': 4
-        }
-        x["HeatingQC"] = x["HeatingQC"].map(map_HeatingQC)
-        x["KitchenQual"] = x["KitchenQual"].map(map_HeatingQC)
-
-
-        map_Functional = {
-            'Sal': 0,
-            'Sev': 1,
-            'Maj2': 2,
-            'Maj1': 3,
-            'Mod': 4,
-            'Min2': 5,
-            'Min1': 6,
-            'Typ': 7
-        }
-        x["Functional"] = x["Functional"].map(map_Functional)
-
-
-        map_GarageFinish = {
-            'NA': 0,
-            'Unf': 1,
-            'RFn': 2,
-            'Fin': 3
-        }
-        x["GarageFinish"] = x["GarageFinish"].map(map_GarageFinish)
-
-
-        map_PavedDrive = {
-            'Y': 0,
-            'P': 1,
-            'N': 2
-        }
-        x["PavedDrive"] = x["PavedDrive"].map(map_PavedDrive)
-
-
-        map_SeasonSold = {
-            'Winter': 0,
-            'Spring': 1,
-            'Summer': 2,
-            'Autumn': 3
-        }
-        x["SeasonSold"] = x["SeasonSold"].map(map_SeasonSold)
-
-
-        return x
-
-
-class OneHotEncoderTransformer(BaseEstimator, TransformerMixin):
-
-    def __init__(self, ohe_min_frequency:float, ohe_max_categories:int):
-        self.ohe_min_frequency = ohe_min_frequency
-        self.ohe_max_categories = ohe_max_categories
-        self.cat_vars=None
-        self.enc=None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "OneHotEncoderTransformer":
-        enc = OneHotEncoder(handle_unknown='ignore', sparse=False, drop="if_binary",
-            min_frequency=self.ohe_min_frequency, max_categories=self.ohe_max_categories)
-        
-        self.cat_vars = x.dtypes[x.dtypes == "object"].index
-        self.enc = enc.fit(x[self.cat_vars])
-        return self
-
+    self.features_to_transform_sqrt = df_tmp[df_tmp.transformer_skew == "sqrt"].index
+    # print(f"sqrt transformation: {self.features_to_transform_sqrt}")
     
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        ohe = pd.DataFrame(self.enc.transform(x[self.cat_vars]), columns=self.enc.get_feature_names_out())
-        
-        x.reset_index(drop=True, inplace=True)
-        ohe.reset_index(drop=True, inplace=True)
+    return self
 
-        x = pd.concat([x, ohe], axis=1).drop(self.cat_vars, axis=1)
-        return x
-    
+  def transform(self, x:pd.DataFrame) -> pd.DataFrame:
+      # use transformation based on lowest skew
+      x[self.features_to_transform_log1p] = x[self.features_to_transform_log1p].apply(np.log1p)
+      x[self.features_to_transform_sqrt] = x[self.features_to_transform_sqrt].apply(np.sqrt)
+      return x
 
-class LowVarianceTransformer(BaseEstimator, TransformerMixin):
-
-    def __init__(self, variance_threshold:float):
-        self.variance_threshold = variance_threshold
-        self.sel_features=None
-        self.sel=None
-        self.sel_features_reduced=None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "LowVarianceTransformer":
-        # remove all features that are either one or zero in more than 95% of the samples
-        sel = VarianceThreshold(threshold=(self.variance_threshold * (1 - self.variance_threshold)))
-        self.sel_features = list(x)
-        # fit the VarianceThreshold object to the training data
-        self.sel = sel.fit(x[self.sel_features])
-
-        # get the column names after the variance threshold reduction
-        self.sel_features_reduced = [self.sel_features[i] for i in self.sel.get_support(indices=True)]
-        return self
-
-
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        x = pd.DataFrame(self.sel.transform(x[self.sel_features]), columns=self.sel_features_reduced)
-        return x
-
-
-class CorrelationTransformer(BaseEstimator, TransformerMixin):
-
-    def __init__(self, correlation_threshold:float):
-        self.correlation_threshold = correlation_threshold
-        self.to_drop=None
-
-    def fit(self, x:pd.DataFrame, y:Optional[pd.DataFrame]=None) -> "CorrelationTransformer":
-        corr_matrix = x.corr().abs()
-
-        # Select upper triangle of correlation matrix
-        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(np.bool))
-
-        # Find features with correlation higher than 0.9 or lower -0.9
-        self.to_drop = [column for column in upper.columns if any((upper[column] > self.correlation_threshold) | (upper[column] < -self.correlation_threshold))]
-        return self
-
-
-    def transform(self, x:pd.DataFrame) -> pd.DataFrame:
-        x =  x.drop(self.to_drop, axis=1)
-        return x
 
 
 class ScalerTransformer(BaseEstimator, TransformerMixin):
@@ -395,3 +137,23 @@ class ScalerTransformer(BaseEstimator, TransformerMixin):
         return pd.concat([x_inverse_transform, x[self.transformer_not_num]], axis=1)
 
 
+
+class CorrelationTransformer(BaseEstimator, TransformerMixin):
+
+    def __init__(self, correlation_threshold:float):
+        self.correlation_threshold = correlation_threshold
+        self.to_drop=None
+
+    def fit(self, x:np.ndarray, y:Optional[pd.DataFrame]=None) -> "CorrelationTransformer":
+        corr_matrix = pd.DataFrame(x).corr().abs()
+
+        # Select upper triangle of correlation matrix
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+        # Find features with correlation higher or lower than correlation_threshold
+        self.to_drop = [column for column in upper.columns if any((upper[column] > self.correlation_threshold) | (upper[column] < -self.correlation_threshold))]
+        return self
+
+    def transform(self, x:np.ndarray) -> pd.DataFrame:
+        x = pd.DataFrame(x).drop(self.to_drop, axis=1)
+        return x
